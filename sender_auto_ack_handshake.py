@@ -4,6 +4,27 @@ from PIL import Image
 import zlib
 import time
 import camera
+import os
+
+# Clear Sense HAT display if framebuffer is active
+try:
+    from sense_hat import SenseHat
+    sense = SenseHat()
+    sense.clear()
+except:
+    pass  # Safe ignore if Sense HAT isn't initialized or installed
+
+# Unexport GPIOs used by Sense HAT joystick (if they were exported)
+joystick_pins = [17, 22, 23, 24, 27]  # GPIOs for Up, Down, Left, Right, Center
+
+for pin in joystick_pins:
+    try:
+        # Unexport GPIO pin if it's exported
+        if os.path.exists(f"/sys/class/gpio/gpio{pin}"):
+            with open("/sys/class/gpio/unexport", "w") as f:
+                f.write(str(pin))
+    except PermissionError:
+        print(f"⚠️ Run with sudo to fully unexport GPIO{pin}")
 
 radio = RF24(22, 0)
 radio.begin()
