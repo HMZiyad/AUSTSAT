@@ -6,25 +6,37 @@ import time
 import camera
 import os
 
-# Clear Sense HAT display if framebuffer is active
-try:
-    from sense_hat import SenseHat
-    sense = SenseHat()
-    sense.clear()
-except:
-    pass  # Safe ignore if Sense HAT isn't initialized or installed
+# GPIOs used by Sense HAT joystick and potentially reserved
+sensehat_pins = [17, 22, 23, 24, 27]  # Joystick directions (Up, Down, Left, Right, Press)
 
-# Unexport GPIOs used by Sense HAT joystick (if they were exported)
-joystick_pins = [17, 22, 23, 24, 27]  # GPIOs for Up, Down, Left, Right, Center
-
-for pin in joystick_pins:
-    try:
-        # Unexport GPIO pin if it's exported
-        if os.path.exists(f"/sys/class/gpio/gpio{pin}"):
-            with open("/sys/class/gpio/unexport", "w") as f:
+def disable_gpio(pin):
+    gpio_path = f"/sys/class/gpio/gpio{pin}"
+    
+    # Export if not already exported
+    if not os.path.exists(gpio_path):
+        try:
+            with open("/sys/class/gpio/export", "w") as f:
                 f.write(str(pin))
-    except PermissionError:
-        print(f"⚠️ Run with sudo to fully unexport GPIO{pin}")
+        except Exception:
+            pass  # Already exported or permission denied
+
+    # Set direction to input and disable pull-up/down
+    try:
+        with open(f"{gpio_path}/direction", "w") as f:
+            f.write("in")
+    except Exception:
+        pass
+
+    # Optional: Unexport to fully release it (not strictly needed)
+    try:
+        with open("/sys/class/gpio/unexport", "w") as f:
+            f.write(str(pin))
+    except Exception:
+        pass
+
+# Run disable logic
+for pin in sensehat_pins:
+    disable_gpio(pin)
 
 radio = RF24(22, 0)
 radio.begin()
