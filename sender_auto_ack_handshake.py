@@ -4,40 +4,52 @@ from PIL import Image
 import zlib
 import time
 import camera
+
 import os
 
-# GPIOs used by Sense HAT joystick and potentially reserved
-sensehat_pins = [17, 22, 23, 24, 27]  # Joystick directions (Up, Down, Left, Right, Press)
+# All GPIOs used by Sense HAT:
+sensehat_gpio_pins = [
+    2,   # I2C SDA
+    3,   # I2C SCL
+    8,   # SPI CE0
+    9,   # SPI MISO
+    10,  # SPI MOSI
+    11,  # SPI SCK
+    17,  # Joystick Up
+    22,  # Joystick Down
+    23,  # Joystick Left
+    24,  # Joystick Right
+    27   # Joystick Center
+]
 
 def disable_gpio(pin):
     gpio_path = f"/sys/class/gpio/gpio{pin}"
-    
-    # Export if not already exported
+
+    # Export if not yet exported
     if not os.path.exists(gpio_path):
         try:
             with open("/sys/class/gpio/export", "w") as f:
                 f.write(str(pin))
         except Exception:
-            pass  # Already exported or permission denied
+            pass  # May already be exported or restricted
 
-    # Set direction to input and disable pull-up/down
+    # Set to input mode (high-impedance, disables output)
     try:
         with open(f"{gpio_path}/direction", "w") as f:
             f.write("in")
     except Exception:
         pass
 
-    # Optional: Unexport to fully release it (not strictly needed)
+    # Optional: Unexport it to release completely
     try:
         with open("/sys/class/gpio/unexport", "w") as f:
             f.write(str(pin))
     except Exception:
         pass
 
-# Run disable logic
-for pin in sensehat_pins:
+# Run the disabling process
+for pin in sensehat_gpio_pins:
     disable_gpio(pin)
-
 radio = RF24(22, 0)
 radio.begin()
 radio.setChannel(76)
