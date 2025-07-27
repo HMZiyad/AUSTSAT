@@ -50,7 +50,7 @@ while True:
                     time.sleep(0.001)
                 chunk = radio.read(32)
                 received.extend(chunk)
-                print(f"Received sensor chunk {i+1}/{chunk_count}", end="\r")
+                print(f"📦 Sensor chunk {i+1}/{chunk_count}", end="\r")
 
             try:
                 sensor_text = received.rstrip(b'\x00').decode()
@@ -58,7 +58,7 @@ while True:
                 print(sensor_text)
                 sensor_data = sensor_text
             except Exception as e:
-                print("❌ Failed to decode sensor data:", e)
+                print("❌ Sensor decode error:", e)
 
         # ---------- IMAGE DATA ----------
         elif prefix == b'IMAG':
@@ -66,24 +66,26 @@ while True:
 
             while not radio.available():
                 time.sleep(0.001)
+
+            # Step 1: Read total image length
             length_bytes = radio.read(4)
             total_len = int.from_bytes(length_bytes, "big")
             print(f"🗂 Expected image size: {total_len} bytes")
 
-            received = bytearray()
-            chunks_expected = (total_len + 31) // 32
-            chunk_counter = 0
+            # Step 2: Calculate how many 32-byte chunks
+            chunk_count = (total_len + 31) // 32
+            print(f"🔢 Receiving {chunk_count} image chunks...")
 
-            while len(received) < total_len:
-                if radio.available():
-                    chunk = radio.read(32)
-                    received.extend(chunk)
-                    chunk_counter += 1
-                    print(f"🧩 Received image chunk {chunk_counter}/{chunks_expected}", end="\r")
-                time.sleep(0.002)
+            received = bytearray()
+            for i in range(chunk_count):
+                while not radio.available():
+                    time.sleep(0.001)
+                chunk = radio.read(32)
+                received.extend(chunk)
+                print(f"🧩 Image chunk {i+1}/{chunk_count}", end="\r")
 
             try:
-                # Crop extra bytes if needed
+                # Step 3: Trim and save image
                 image_bytes = bytes(received[:total_len])
                 img = Image.frombytes("RGB", (64, 64), image_bytes)
 
@@ -96,7 +98,7 @@ while True:
 
                 os.remove(filename)
             except Exception as e:
-                print("❌ Image error:", e)
+                print("❌ Image decode error:", e)
 
     # ---------- Upload When Both Are Ready ----------
     if sensor_data and image_base64:
@@ -117,7 +119,7 @@ while True:
         except Exception as e:
             print("❌ Firebase error:", e)
 
-        # Reset for next transmission
+        # Reset state
         sensor_data = None
         image_base64 = None
         print("🔄 Ready for next data set.")
