@@ -37,21 +37,26 @@ env = read_environmental_data()
 sensor_text = f"{timestamp}|T:{env['temperature']}C|H:{env['humidity']}%|P:{env['pressure']}hPa"
 sensor_bytes = sensor_text.encode()
 
+# Send prefix
 radio.write(b'SENS')
 time.sleep(0.01)
 
+# Chunk sensor data
 chunk_size = 32
 chunks = [sensor_bytes[i:i+chunk_size] for i in range(0, len(sensor_bytes), chunk_size)]
 
+# Send number of chunks
 radio.write(len(chunks).to_bytes(1, 'big'))
 time.sleep(0.01)
 
+# Send each chunk
 for i, chunk in enumerate(chunks):
     if len(chunk) < chunk_size:
-        chunk += b'\x00' * (chunk_size - len(chunk))
+        chunk += b'\x00' * (chunk_size - len(chunk))  # Pad last chunk
     radio.write(chunk)
     print(f"Sent sensor chunk {i+1}/{len(chunks)}")
     time.sleep(0.01)
+
 
 # ---------- Send Image ----------
 filename = camera.capture_photo()
