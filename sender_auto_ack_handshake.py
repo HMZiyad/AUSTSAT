@@ -1,29 +1,26 @@
 from RF24 import RF24,RF24_1MBPS
 from PIL import Image
-import zlib
 import time
 import camera
-import json
-from sensehat_sensors import read_environmental_data, read_motion_data
+from sense import read_environmental_data
+import uuid
 
-# NRF24 Setup
-radio = RF24(22, 0)  # CE = GPIO 22 (or change to 26), CSN = SPI CE0
+radio = RF24(22, 0)
 radio.begin()
 radio.setChannel(76)
 radio.setPALevel(2, False)
-radio.setDataRate(RF24_1MBPS)
 radio.setAutoAck(True)
 radio.enableDynamicPayloads()
 radio.enableAckPayload()
 radio.openWritingPipe(b'1Node')
 radio.stopListening()
 
-# Handshake
+# ---------- Handshake ----------
 radio.write(b'SYNC')
 print("Sent SYNC, waiting for ACK...")
 time.sleep(1)
-radio.startListening()
 
+radio.startListening()
 start = time.time()
 while time.time() - start < 3:
     if radio.available():
@@ -33,67 +30,46 @@ while time.time() - start < 3:
             break
 radio.stopListening()
 
-# ---------- 1. Read Sensors ----------
+# ---------- Send Sensor Data ----------
 timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
-env_data = read_environmental_data()
-motion_data = read_motion_data()
+env = read_environmental_data()
 
-sensor_payload = {
-    "timestamp": timestamp,
-    "temperature": env_data["temperature"],
-    "humidity": env_data["humidity"],
-    "pressure": env_data["pressure"],
-    "pitch": motion_data["orientation"]["pitch"],
-    "roll": motion_data["orientation"]["roll"],
-    "yaw": motion_data["orientation"]["yaw"],
-    "accel": motion_data["accel_raw"],
-    "gyro": motion_data["gyro_raw"],
-    "compass": motion_data["compass"]
-}
+sensor_text = f"{timestamp}|T:{env['temperature']}C|H:{env['humidity']}%|P:{env['pressure']}hPa"
+sensor_bytes = sensor_text.encode()
 
-sensor_json = json.dumps(sensor_payload)
-sensor_compressed = zlib.compress(sensor_json.encode())
-
-print(f"Sending sensor data: {sensor_json}")
-radio.write(b'SENS')  # Prefix for sensor packet
+radio.write(b'SENS')
 time.sleep(0.01)
-radio.write(len(sensor_compressed).to_bytes(2, 'big'))
-time.sleep(0.01)
-for i in range(0, len(sensor_compressed), 32):
-    chunk = sensor_compressed[i:i + 32]
-    if len(chunk) < 32:
-        chunk += b'\x00' * (32 - len(chunk))
-    radio.write(chunk)
-    time.sleep(0.002)
-
-print("Sensor data sent ✅")
-
-# ---------- 2. Capture & Send Image ----------
-filename = camera.capture_photo()
-img = Image.open(filename).convert("RGB").resize((64, 64))
-raw_bytes = img.tobytes()
-compressed = zlib.compress(raw_bytes)
-
-print(f"Original: {len(raw_bytes)} bytes, Compressed: {len(compressed)} bytes")
-print("Sending image...")
 
 chunk_size = 32
-chunks = [compressed[i:i + chunk_size] for i in range(0, len(compressed), chunk_size)]
+chunks = [sensor_bytes[i:i+chunk_size] for i in range(0, len(sensor_bytes), chunk_size)]
 
-# Notify receiver
-radio.write(b'IMAG')
-time.sleep(0.01)
-radio.write(len(compressed).to_bytes(4, 'big'))  # Send image size
+radio.write(len(chunks).to_bytes(1, 'big'))
 time.sleep(0.01)
 
 for i, chunk in enumerate(chunks):
     if len(chunk) < chunk_size:
         chunk += b'\x00' * (chunk_size - len(chunk))
-    success = radio.write(chunk)
-    if success:
-        print(f"Sent chunk {i+1}/{len(chunks)} ✅")
-    else:
-        print(f"Sent chunk {i+1}/{len(chunks)} ❌")
-    time.sleep(0.002)
+    radio.write(chunk)
+    print(f"Sent sensor chunk {i+1}/{len(chunks)}")
+    time.sleep(0.01)
 
-print("Image transfer complete ✅")
+# ---------- Send Image ----------
+filename = camera.capture_photo()
+img = Image.open(filename).convert("RGB").resize((64, 64))
+img_bytes = img.tobytes()
+
+print(f"Sending image of {len(img_bytes)} bytes")
+radio.write(b'IMAG')
+time.sleep(0.01)
+radio.write(len(img_bytes).to_bytes(4, 'big'))
+time.sleep(0.01)
+
+img_chunks = [img_bytes[i:i+32] for i in range(0, len(img_bytes), 32)]
+for i, chunk in enumerate(img_chunks):
+    if len(chunk) < 32:
+        chunk += b'\x00' * (32 - len(chunk))
+    radio.write(chunk)
+    print(f"Sent image chunk {i+1}/{len(img_chunks)}")
+    time.sleep(0.005)
+
+print("✅ Sensor data and image sent.")
