@@ -24,9 +24,15 @@ while True:
     if radio.available():
         msg = radio.read(4)
         if msg == b'SYNC':
+            radio.stopListening()
+            time.sleep(0.05)
             radio.writeAckPayload(1, b'ACK')
             print("Handshake complete.")
+            radio.startListening()
             break
+
+        else:
+            continue
 
 sensor_data = {}
 image_base64 = None
