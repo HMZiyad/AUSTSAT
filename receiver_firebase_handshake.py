@@ -19,6 +19,7 @@ radio.openReadingPipe(1, b'1Node')
 radio.startListening()
 
 sensor_data = None
+sensor_json_filename = None
 image_base64 = None
 
 # ---------- Handshake ----------
@@ -57,48 +58,55 @@ while True:
                 print("\n✅ Sensor data received:")
                 print(sensor_text)
                 sensor_data = sensor_text
+
+                # --- Convert to JSON and Save ---
+                parts = sensor_text.split("|")
+                parsed_data = {
+                    "timestamp": parts[0]
+                }
+
+                for item in parts[1:]:
+                    if ':' in item:
+                        key, value = item.split(":")
+                        value = ''.join(c for c in value if c.isdigit() or c == '.' or c == '-')
+                        try:
+                            parsed_data[key] = float(value)
+                        except:
+                            parsed_data[key] = value
+
+                sensor_json_filename = f"sensor_{uuid.uuid4().hex}.json"
+                with open(sensor_json_filename, "w") as f:
+                    json.dump(parsed_data, f, indent=2)
+                print(f"💾 Sensor data saved to {sensor_json_filename}")
+
             except Exception as e:
-                print("❌ Sensor decode error:", e)
+                print("❌ Failed to decode or parse sensor data:", e)
 
         # ---------- IMAGE DATA ----------
         elif prefix == b'IMAG':
-            print("\n🖼️ Receiving image...")
-
-            while not radio.available():
-                time.sleep(0.001)
-
-            # Step 1: Read total image length
-            length_bytes = radio.read(2)
+            length_bytes = radio.read(4)
             total_len = int.from_bytes(length_bytes, "big")
-            print(f"🗂 Expected image size: {total_len} bytes")
-
-            # Step 2: Calculate how many 32-byte chunks
-            chunk_count = (total_len + 31) // 32
-            print(f"🔢 Receiving {chunk_count} image chunks...")
+            print(f"\n🖼️ Receiving image ({total_len} bytes)...")
 
             received = bytearray()
-            for i in range(chunk_count):
-                while not radio.available():
-                    time.sleep(0.001)
-                chunk = radio.read(32)
-                received.extend(chunk)
-                print(f"🧩 Image chunk {i+1}/{chunk_count}", end="\r")
+            while len(received) < total_len:
+                if radio.available():
+                    chunk = radio.read(32)
+                    received.extend(chunk)
+                time.sleep(0.002)
 
             try:
-                # Step 3: Trim and save image
-                image_bytes = bytes(received[:total_len])
-                img = Image.frombytes("RGB", (64, 64), image_bytes)
-
+                img = Image.frombytes("RGB", (64, 64), bytes(received))
                 filename = f"received_{uuid.uuid4().hex}.jpg"
                 img.save(filename)
-                print(f"\n✅ Image saved as {filename}")
+                print(f"✅ Image saved as {filename}")
 
                 with open(filename, "rb") as f:
                     image_base64 = base64.b64encode(f.read()).decode()
 
                 os.remove(filename)
             except Exception as e:
-                print("❌ Image decode error:", e)
+                print("❌ Image error:", e)
 
     # ---------- Upload When Both Are Ready ----------
     if sensor_data and image_base64:
@@ -106,7 +114,8 @@ while True:
 
         data = {
             "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
-            "sensor_data": sensor_data,
+            "sensor_data_text": sensor_data,
+            "sensor_json_file": sensor_json_filename,
             "image_base64": image_base64
         }
 
@@ -119,7 +128,8 @@ while True:
         except Exception as e:
             print("❌ Firebase error:", e)
 
-        # Reset state
+        # Reset for next transmission
         sensor_data = None
+        sensor_json_filename = None
         image_base64 = None
         print("🔄 Ready for next data set.")
