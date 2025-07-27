@@ -1,45 +1,39 @@
-# sender_fixed.py
-from RF24 import RF24
+from RF24 import RF24,RF24_1MBPS
 from PIL import Image
 import zlib
 import time
+import camera
 import json
-# Assuming you have these helper files
-from camera import capture_photo 
-from sense import read_environmental_data, read_motion_data
+from sensehat_sensors import read_environmental_data, read_motion_data
 
-# ---------- NRF24 Setup ----------
-radio = RF24(22, 0) # CE = GPIO 22, CSN = SPI CE0
-if not radio.begin():
-    raise RuntimeError("radio hardware is not responding")
+# NRF24 Setup
+radio = RF24(22, 0)  # CE = GPIO 22 (or change to 26), CSN = SPI CE0
+radio.begin()
 radio.setChannel(76)
-radio.setPALevel(RF24.PA_LOW)
-radio.setDataRate(RF24.DR_1MBPS)
+radio.setPALevel(2, False)
+radio.setDataRate(RF24_1MBPS)
 radio.setAutoAck(True)
 radio.enableDynamicPayloads()
+radio.enableAckPayload()
 radio.openWritingPipe(b'1Node')
 radio.stopListening()
 
-# ---------- Handshake ----------
-print("Sending SYNC for handshake...")
+# Handshake
 radio.write(b'SYNC')
+print("Sent SYNC, waiting for ACK...")
+time.sleep(1)
 radio.startListening()
+
 start = time.time()
-handshake_ok = False
-while time.time() - start < 2:
+while time.time() - start < 3:
     if radio.available():
         response = radio.read(radio.getDynamicPayloadSize())
         if response == b'ACK':
-            print("ACK received, handshake complete.")
-            handshake_ok = True
+            print("ACK received, starting transfer.")
             break
 radio.stopListening()
 
-if not handshake_ok:
-    print("Handshake failed. Exiting.")
-    exit()
-
-# ---------- 1. Read Sensors and Send in One Packet ----------
+# ---------- 1. Read Sensors ----------
 timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
 env_data = read_environmental_data()
 motion_data = read_motion_data()
@@ -49,69 +43,57 @@ sensor_payload = {
     "temperature": env_data["temperature"],
     "humidity": env_data["humidity"],
     "pressure": env_data["pressure"],
-    "orientation": motion_data["orientation"],
-    "accel_raw": motion_data["accel_raw"],
-    "gyro_raw": motion_data["gyro_raw"],
+    "pitch": motion_data["orientation"]["pitch"],
+    "roll": motion_data["orientation"]["roll"],
+    "yaw": motion_data["orientation"]["yaw"],
+    "accel": motion_data["accel_raw"],
+    "gyro": motion_data["gyro_raw"],
     "compass": motion_data["compass"]
 }
 
 sensor_json = json.dumps(sensor_payload)
 sensor_compressed = zlib.compress(sensor_json.encode())
 
-# Construct a single packet: 4-byte prefix + compressed data
-# The total payload must be <= 32 bytes for a single packet.
-# If compressed data is > 28 bytes, this simple method will fail.
-# For this lab, zlib will likely make it small enough.
-sensor_packet = b'SENS' + sensor_compressed
-if len(sensor_packet) > 32:
-    print("❌ Compressed sensor data is too large for a single packet!")
-else:
-    print(f"Sending sensor data: {len(sensor_packet)} bytes")
-    if radio.write(sensor_packet):
-        print("Sensor data sent ✅")
-    else:
-        print("Sensor data send failed ❌")
+print(f"Sending sensor data: {sensor_json}")
+radio.write(b'SENS')  # Prefix for sensor packet
+time.sleep(0.01)
+radio.write(len(sensor_compressed).to_bytes(2, 'big'))
+time.sleep(0.01)
+for i in range(0, len(sensor_compressed), 32):
+    chunk = sensor_compressed[i:i + 32]
+    if len(chunk) < 32:
+        chunk += b'\x00' * (32 - len(chunk))
+    radio.write(chunk)
+    time.sleep(0.002)
 
-time.sleep(0.5) # Give receiver time to process
+print("Sensor data sent ✅")
 
 # ---------- 2. Capture & Send Image ----------
-filename = capture_photo()
+filename = camera.capture_photo()
 img = Image.open(filename).convert("RGB").resize((64, 64))
 raw_bytes = img.tobytes()
 compressed = zlib.compress(raw_bytes)
 
-print(f"\nOriginal Img: {len(raw_bytes)} bytes, Compressed: {len(compressed)} bytes")
+print(f"Original: {len(raw_bytes)} bytes, Compressed: {len(compressed)} bytes")
 print("Sending image...")
 
-# Send prefix and total size in the first packet
-size_packet = b'IMAG' + len(compressed).to_bytes(4, 'big')
-radio.write(size_packet)
+chunk_size = 32
+chunks = [compressed[i:i + chunk_size] for i in range(0, len(compressed), chunk_size)]
 
-# Wait for receiver to acknowledge it got the size
-radio.startListening()
-start = time.time()
-size_ack_ok = False
-while time.time() - start < 2:
-    if radio.available():
-        if radio.read(radio.getDynamicPayloadSize()) == b'GOTSIZE':
-            print("Receiver acknowledged image size. Starting chunk transfer.")
-            size_ack_ok = True
-            break
-radio.stopListening()
+# Notify receiver
+radio.write(b'IMAG')
+time.sleep(0.01)
+radio.write(len(compressed).to_bytes(4, 'big'))  # Send image size
+time.sleep(0.01)
 
-if not size_ack_ok:
-    print("Receiver did not acknowledge image size. Aborting image transfer.")
-else:
-    # Send image in chunks
-    chunk_size = 28 # Leave space for potential headers in the future
-    chunks = [compressed[i:i + chunk_size] for i in range(0, len(compressed), chunk_size)]
-    for i, chunk in enumerate(chunks):
-        if radio.write(chunk):
-            print(f"  -> Sent chunk {i+1}/{len(chunks)} ✅")
-        else:
-            print(f"  -> Sent chunk {i+1}/{len(chunks)} ❌ - RETRYING")
-            if not radio.write(chunk): # Simple retry
-                 print(f"  -> Sent chunk {i+1}/{len(chunks)} ❌ - FAILED")
-        time.sleep(0.005) # Small delay between chunks
+for i, chunk in enumerate(chunks):
+    if len(chunk) < chunk_size:
+        chunk += b'\x00' * (chunk_size - len(chunk))
+    success = radio.write(chunk)
+    if success:
+        print(f"Sent chunk {i+1}/{len(chunks)} ✅")
+    else:
+        print(f"Sent chunk {i+1}/{len(chunks)} ❌")
+    time.sleep(0.002)
 
-    print("\nImage transfer complete ✅")
+print("Image transfer complete ✅")
