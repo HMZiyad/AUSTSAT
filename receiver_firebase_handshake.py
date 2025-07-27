@@ -62,23 +62,34 @@ while True:
 
         # ---------- IMAGE DATA ----------
         elif prefix == b'IMAG':
+            print("\n🖼️ Receiving image...")
+
+            while not radio.available():
+                time.sleep(0.001)
             length_bytes = radio.read(4)
             total_len = int.from_bytes(length_bytes, "big")
-            print(f"\n🖼️ Receiving image ({total_len} bytes)...")
+            print(f"🗂 Expected image size: {total_len} bytes")
 
             received = bytearray()
+            chunks_expected = (total_len + 31) // 32
+            chunk_counter = 0
+
             while len(received) < total_len:
                 if radio.available():
                     chunk = radio.read(32)
                     received.extend(chunk)
+                    chunk_counter += 1
+                    print(f"🧩 Received image chunk {chunk_counter}/{chunks_expected}", end="\r")
                 time.sleep(0.002)
 
             try:
-                # Image is RGB and 64x64
-                img = Image.frombytes("RGB", (64, 64), bytes(received))
+                # Crop extra bytes if needed
+                image_bytes = bytes(received[:total_len])
+                img = Image.frombytes("RGB", (64, 64), image_bytes)
+
                 filename = f"received_{uuid.uuid4().hex}.jpg"
                 img.save(filename)
-                print(f"✅ Image saved as {filename}")
+                print(f"\n✅ Image saved as {filename}")
 
                 with open(filename, "rb") as f:
                     image_base64 = base64.b64encode(f.read()).decode()
