@@ -68,7 +68,7 @@ while True:
                 time.sleep(0.001)
 
             # Step 1: Read total image length
-            length_bytes = radio.read(4)
+            length_bytes = radio.read(2)
             total_len = int.from_bytes(length_bytes, "big")
             print(f"🗂 Expected image size: {total_len} bytes")
 
