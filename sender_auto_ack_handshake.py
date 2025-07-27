@@ -1,14 +1,15 @@
-from RF24 import RF24,RF24_1MBPS
+from RF24 import RF24, RF24_1MBPS
 from PIL import Image
 import time
 import camera
-from sense import read_environmental_data
+from sense import read_environmental_data, read_motion_data  # Make sure you defined this
 import uuid
 
 radio = RF24(22, 0)
 radio.begin()
 radio.setChannel(76)
 radio.setPALevel(2, False)
+radio.setDataRate(RF24_1MBPS)
 radio.setAutoAck(True)
 radio.enableDynamicPayloads()
 radio.enableAckPayload()
@@ -30,11 +31,20 @@ while time.time() - start < 3:
             break
 radio.stopListening()
 
-# ---------- Send Sensor Data ----------
+# ---------- Read and Send Sensor Data ----------
 timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
 env = read_environmental_data()
+motion = read_motion_data()
 
-sensor_text = f"{timestamp}|T:{env['temperature']}C|H:{env['humidity']}%|P:{env['pressure']}hPa"
+sensor_text = (
+    f"{timestamp}|"
+    f"T:{env['temperature']}C|H:{env['humidity']}%|P:{env['pressure']}hPa|"
+    f"Pitch:{motion['orientation']['pitch']}|Roll:{motion['orientation']['roll']}|Yaw:{motion['orientation']['yaw']}|"
+    f"Ax:{motion['accel_raw']['x']}|Ay:{motion['accel_raw']['y']}|Az:{motion['accel_raw']['z']}|"
+    f"Gx:{motion['gyro_raw']['x']}|Gy:{motion['gyro_raw']['y']}|Gz:{motion['gyro_raw']['z']}|"
+    f"Compass:{motion['compass']}"
+)
+
 sensor_bytes = sensor_text.encode()
 
 # Send prefix
@@ -43,7 +53,7 @@ time.sleep(0.01)
 
 # Chunk sensor data
 chunk_size = 32
-chunks = [sensor_bytes[i:i+chunk_size] for i in range(0, len(sensor_bytes), chunk_size)]
+chunks = [sensor_bytes[i:i + chunk_size] for i in range(0, len(sensor_bytes), chunk_size)]
 
 # Send number of chunks
 radio.write(len(chunks).to_bytes(1, 'big'))
@@ -52,11 +62,10 @@ time.sleep(0.01)
 # Send each chunk
 for i, chunk in enumerate(chunks):
     if len(chunk) < chunk_size:
-        chunk += b'\x00' * (chunk_size - len(chunk))  # Pad last chunk
+        chunk += b'\x00' * (chunk_size - len(chunk))
     radio.write(chunk)
     print(f"Sent sensor chunk {i+1}/{len(chunks)}")
     time.sleep(0.01)
-
 
 # ---------- Send Image ----------
 filename = camera.capture_photo()
@@ -69,7 +78,7 @@ time.sleep(0.01)
 radio.write(len(img_bytes).to_bytes(4, 'big'))
 time.sleep(0.01)
 
-img_chunks = [img_bytes[i:i+32] for i in range(0, len(img_bytes), 32)]
+img_chunks = [img_bytes[i:i + 32] for i in range(0, len(img_bytes), 32)]
 for i, chunk in enumerate(img_chunks):
     if len(chunk) < 32:
         chunk += b'\x00' * (32 - len(chunk))
