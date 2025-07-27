@@ -6,6 +6,7 @@ import requests
 import uuid
 import os
 
+# Setup NRF24L01
 radio = RF24(22, 0)
 radio.begin()
 radio.setChannel(76)
@@ -20,13 +21,13 @@ sensor_data = None
 image_base64 = None
 
 # ---------- Handshake ----------
-print("Waiting for handshake...")
+print("📡 Waiting for handshake...")
 while True:
     if radio.available():
         msg = radio.read(4)
         if msg == b'SYNC':
             radio.writeAckPayload(1, b'ACK')
-            print("Handshake complete.")
+            print("🤝 Handshake complete.")
             break
 
 # ---------- Receive Loop ----------
@@ -36,8 +37,11 @@ while True:
 
         # ---------- SENSOR DATA ----------
         if prefix == b'SENS':
+            while not radio.available():
+                time.sleep(0.001)
+
             chunk_count = int.from_bytes(radio.read(1), "big")
-            print(f"Receiving {chunk_count} sensor chunks...")
+            print(f"📥 Receiving {chunk_count} sensor chunks...")
 
             received = bytearray()
             for i in range(chunk_count):
@@ -45,20 +49,21 @@ while True:
                     time.sleep(0.001)
                 chunk = radio.read(32)
                 received.extend(chunk)
-                print(f"Received chunk {i+1}/{chunk_count}", end="\r")
+                print(f"Received sensor chunk {i+1}/{chunk_count}", end="\r")
 
             try:
-                sensor_data = received.rstrip(b'\x00').decode()
+                sensor_text = received.rstrip(b'\x00').decode()
                 print("\n✅ Sensor data received:")
-                print(sensor_data)
+                print(sensor_text)
+                sensor_data = sensor_text
             except Exception as e:
-                print("❌ Sensor decode error:", e)
+                print("❌ Failed to decode sensor data:", e)
 
         # ---------- IMAGE DATA ----------
         elif prefix == b'IMAG':
             length_bytes = radio.read(4)
             total_len = int.from_bytes(length_bytes, "big")
-            print(f"Receiving image ({total_len} bytes)...")
+            print(f"\n🖼️ Receiving image ({total_len} bytes)...")
 
             received = bytearray()
             while len(received) < total_len:
@@ -80,9 +85,10 @@ while True:
             except Exception as e:
                 print("❌ Image error:", e)
 
-    # ---------- Upload if Both Received ----------
+    # ---------- Upload When Both Are Ready ----------
     if sensor_data and image_base64:
         firebase_url = "https://fire-authentic-f5c81-default-rtdb.firebaseio.com/image_log.json"
+
         data = {
             "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
             "sensor_data": sensor_data,
@@ -94,10 +100,11 @@ while True:
             if res.status_code == 200:
                 print("✅ Uploaded to Firebase.")
             else:
-                print("❌ Upload failed:", res.status_code)
+                print("❌ Upload failed. Status code:", res.status_code)
         except Exception as e:
             print("❌ Firebase error:", e)
 
+        # Reset for next transmission
         sensor_data = None
         image_base64 = None
         print("🔄 Ready for next data set.")
