@@ -1,6 +1,7 @@
 from sense_hat import SenseHat
 import time
 
+
 sense = SenseHat()
 
 def display_message(text="Hello!", color=[0, 255, 0], scroll_speed=0.05):
